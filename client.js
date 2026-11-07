@@ -265,7 +265,12 @@ window.__ModuleLoader__.load({
      * @param {object} keepAlive - The controller.
      */
     function install(ctx, keepAlive) {
-      const doc = ctx?.document || (typeof document !== 'undefined' ? document : null)
+      // `ctx` is a Cordis proxy: reading a service the host does not provide
+      // throws ("cannot get property ... without inject"), so `ctx.document`
+      // cannot be probed — the `||` below would never run. DOM is a global in
+      // the browser, not a service: no DSH client package provides one, and
+      // every other DOM-touching client plugin reads the global directly.
+      const doc = typeof document !== 'undefined' ? document : null
       if (!doc || !doc.body) return
       const t = ctx?.locale?.bind ? ctx.locale.bind(NS) : (key) => key
       const pill = doc.createElement('button')

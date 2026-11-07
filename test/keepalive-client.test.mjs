@@ -11,8 +11,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
  * back the way it found it.
  */
 
-/** Load the client plugin and activate it. */
-async function activatePlugin() {
+/**
+ * Load the client plugin and activate it.
+ *
+ * @param {object} options - How to build the context.
+ * @param {boolean} options.strictServices - Make the context behave like a
+ *   real Cordis proxy: reading a service it does not provide throws instead
+ *   of answering undefined. The real host has no `document` service, so the
+ *   plugin must not read one from the context.
+ * @returns {Promise<object>} The plugin's exports and what it registered.
+ */
+async function activatePlugin({ strictServices = false } = {}) {
   let captured = null
   window.__ModuleLoader__ = {
     load(module) {
@@ -26,7 +35,7 @@ async function activatePlugin() {
   const disposers = []
   const dictionaries = new Map()
   const services = new Map()
-  exports.apply({
+  const plain = {
     effect(body) {
       disposers.push(body())
     },
@@ -45,7 +54,19 @@ async function activatePlugin() {
         return (key) => values.zh?.[key] ?? values.en?.[key] ?? key
       },
     },
-  })
+  }
+  // A real Cordis context answers a service it does not provide with a
+  // thrown error, not with undefined. A plain object cannot reproduce that,
+  // which is how the `ctx.document` bug survived the first test run.
+  const ctx = strictServices
+    ? new Proxy(plain, {
+        get(target, prop) {
+          if (prop in target) return Reflect.get(target, prop)
+          throw new Error(`cannot get property "${String(prop)}" without inject`)
+        },
+      })
+    : plain
+  exports.apply(ctx)
   return { exports, disposers, services }
 }
 
@@ -119,6 +140,19 @@ describe('dsh-audio-keepalive', () => {
     expect(keepAlive.state()).toBe('off')
     expect(document.querySelector('audio')).toBeNull()
     expect(document.documentElement.getAttribute('data-dsh-keepalive')).toBe('off')
+  })
+
+  it('activates on a host that provides no document service', async () => {
+    // The real host provides no `document` service: reading one from the
+    // context throws "cannot get property ... without inject" and the plugin
+    // fails to load. The page document is a browser global, so the plugin
+    // reads the global instead.
+    const { services } = await activatePlugin({ strictServices: true })
+    const keepAlive = services.get('dshAudioKeepAlive')
+
+    expect(keepAlive).toBeDefined()
+    expect(keepAlive.state()).toBe('armed')
+    expect(document.querySelector('[data-dsh-keepalive-pill]')).not.toBeNull()
   })
 
   it('produces a silent WAV data URI', async () => {
